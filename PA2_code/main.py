@@ -73,7 +73,7 @@ def compute_classifier_accuracy(classifier, data_loader):
     with torch.no_grad():
         for X, Y in data_loader:
             X, Y = X.to(device), Y.to(device)
-            outputs, _ = classifier(X)
+            outputs, _, _ = classifier(X)
             _, predicted = torch.max(outputs.data, 1)
             total_correct += (predicted == Y).sum().item()
             total_samples += Y.size(0)
@@ -91,7 +91,7 @@ def compute_perplexity(decoderLMmodel, data_loader, eval_iters=100):
     total_loss = 0  # Initialize total_loss here
     for X, Y in data_loader:
         X, Y = X.to(device), Y.to(device)
-        _, loss = decoderLMmodel(X, Y) # your model should be computing the cross entropy loss
+        _, loss, _ = decoderLMmodel(X, Y) # your model should be computing the cross entropy loss
         losses.append(loss.item())
         total_loss += loss.item()
         if len(losses) >= eval_iters: break
@@ -123,12 +123,17 @@ def main():
     # we can create an Optimizer
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
 
-    # utility = Utilities(tokenizer, model)
-    # sentence = "Sample sentence for  my sanity check for NLP PA2"
-    # utility.sanity_check(sentence, block_size)
+    utility = Utilities(tokenizer, model)
+    sentence = "Sample sentence for  my sanity check for NLP Q1 PA2"
+    utility.sanity_check01(sentence, block_size)
   
     decoderModel = DecoderModel(tokenizer.vocab_size).to(device)
     decoder_optimizer = torch.optim.AdamW(decoderModel.parameters(), lr=learning_rate)
+
+    utility = Utilities(tokenizer, decoderModel)
+    sent = "Sample sentence for  my sanity check for NLP Q2 PA2"
+    utility.sanity_check02(sent, block_size)
+
     inputfile = "speechesdataset/train_LM.txt"
     with open(inputfile, 'r', encoding='utf-8') as f:
         lmtrainText = f.read()
@@ -168,7 +173,7 @@ def main():
             # yb : tensor containing the corresponding labels like 0,1,2
             #print(yb)
             # CLS training code here
-            logits, loss = model(xb, yb)
+            logits, loss, attention_map = model(xb, yb)
             
             # Backward pass
             # Clear the gradients
@@ -198,7 +203,7 @@ def main():
             break
         xb, yb = xb.to(device), yb.to(device)
         # LM training code here
-        _, loss = decoderModel(xb, yb)
+        _, loss, _ = decoderModel(xb, yb)
             
         # Backward pass
         # Clear the gradients
