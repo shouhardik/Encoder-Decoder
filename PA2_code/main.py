@@ -8,8 +8,11 @@ from torch.nn import functional as F
 from tokenizer import SimpleTokenizer
 from dataset import SpeechesClassificationDataset, LanguageModelingDataset
 from transformer import EncoderModel, DecoderModel
-from utilities import Utilities
-
+from alibi import EncoderModelALiBi, DecoderModelALiBi
+from utilities import Utilities, visualize_alibi_patterns
+from sparse import SparseEncoderModel, SparseDecoderModel
+from disentagled import DistangledEncoderModel, DisentagledDecoderModel
+from rpe import RelativePositionEncoder, RelativePositionDecoder
 seed = 42
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -120,6 +123,10 @@ def main():
     test_CLS_loader = DataLoader(test_CLS_dataset, batch_size=batch_size,collate_fn=collate_batch,shuffle=True)
 
     model = EncoderModel(tokenizer.vocab_size).to(device)
+    #model = EncoderModelALiBi(tokenizer.vocab_size).to(device)
+    #model = SparseEncoderModel(tokenizer.vocab_size).to(device)
+    #model = DistangledEncoderModel(tokenizer.vocab_size).to(device)
+    #model = RelativePositionEncoder(tokenizer.vocab_size).to(device)
     # we can create an Optimizer
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
 
@@ -128,11 +135,22 @@ def main():
     utility.sanity_check01(sentence, block_size)
   
     decoderModel = DecoderModel(tokenizer.vocab_size).to(device)
+    #decoderModel = DecoderModelALiBi(tokenizer.vocab_size).to(device)
+    #decoderModel = SparseDecoderModel(tokenizer.vocab_size).to(device)
+    #decoderModel = DisentagledDecoderModel(tokenizer.vocab_size).to(device)
+    #decoderModel = RelativePositionDecoder(tokenizer.vocab_size).to(device)
     decoder_optimizer = torch.optim.AdamW(decoderModel.parameters(), lr=learning_rate)
 
     utility = Utilities(tokenizer, decoderModel)
     sent = "Sample sentence for  my sanity check for NLP Q2 PA2"
     utility.sanity_check02(sent, block_size)
+
+    # alibiModel = EncoderModelALiBi(tokenizer.vocab_size).to(device)
+    # tokenizer = tokenizer
+    # text = "Example input text to analyze"
+    # # util = AttentionVisualizer(alibiModel)
+    # # util.
+    # visualize_alibi_patterns(alibiModel, text, tokenizer)
 
     inputfile = "speechesdataset/train_LM.txt"
     with open(inputfile, 'r', encoding='utf-8') as f:

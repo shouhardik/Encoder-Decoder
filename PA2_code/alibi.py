@@ -1,9 +1,7 @@
-# add all  your Encoder and Decoder code here
 import torch
 import torch.nn as nn
-from torch.nn import functional as F
+import torch.nn.functional as F
 
-# The list of my Hyperparameters
 batch_size = 16  # Number of independent sequences  we will process in parallel
 block_size = 32  # Maximum context length for predictions
 learning_rate = 1e-3  # Learning rate for the optimizer
@@ -15,47 +13,54 @@ num_heads = 2
 dropout=0.2
 n_output = 3  # Output size for the classifier, we have 3 classes
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-class Head(nn.Module):
-    """ My head for self-attention """
-
-    def __init__(self, head_size):
+class HeadALiBi(nn.Module):
+    """Head for self-attention with ALiBi positional encoding"""
+    
+    def __init__(self, head_size, head_index, num_heads):
         super().__init__()
         self.key = nn.Linear(model_dim, head_size, bias=False)
         self.query = nn.Linear(model_dim, head_size, bias=False)
         self.value = nn.Linear(model_dim, head_size, bias=False)
-        self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size)))
         self.dropout = nn.Dropout(dropout)
+        
+        # ALiBi slope computation
+        m = 2 ** -(8 / num_heads) * (head_index + 1)
+        self.register_buffer(
+            "alibi_bias",
+            -m * torch.arange(block_size).unsqueeze(0).expand(block_size, -1)
+        )
 
     def forward(self, x):
-        # Batch Size, Sequence Length, Embedding Dimension
-        B,T,C = x.shape
-        k = self.key(x)   # (B,T,head size)
-        q = self.query(x) # (B,T,head size)
-        # computing attention scores using the scaled dot product
-        weight = q @ k.transpose(-2,-1) * k.shape[-1]**-0.5 # (B, T, C) @ (B, C, T) -> (B, T, T)
+        B, T, C = x.shape
+        k = self.key(x)   # (B,T,head_size)
+        q = self.query(x) # (B,T,head_size)
+        v = self.value(x) # (B,T,head_size)
+
+        # Compute attention scores
+        weight = q @ k.transpose(-2,-1) * k.shape[-1]**-0.5  # (B,T,T)
         
-        # Store the attention weights BEFORE softmax and dropout
-        raw_weights = weight.clone()
+        # Add ALiBi positional bias
+        # Use only the relevant part of the bias based on sequence length
+        weight = weight + self.alibi_bias[:T, :T]
         
-        weight = F.softmax(weight, dim=-1) # (B, T, T)
+        # Store raw weights before softmax and dropout
+        attention_weights = F.softmax(weight, dim=-1)
         
-        # Store normalized weights BEFORE dropout
-        attention_weights = weight.clone()
+        # Apply dropout
+        weight = self.dropout(attention_weights)
         
-        # Now apply dropout
-        weight = self.dropout(weight)
-        
-        # performing the weighted aggregation of the values
-        v = self.value(x) # (B,T,C)
-        output = weight @ v # (B, T, T) @ (B, T, C) -> (B, T, C)
+        # Weighted aggregation of values
+        output = weight @ v
         
         return output, attention_weights
 
-class MultiHeadAttention(nn.Module):
+class MultiHeadAttentionALiBi(nn.Module):
     def __init__(self, num_heads, head_size):
         super().__init__()
-        self.heads = nn.ModuleList([Head(head_size) for i in range(num_heads)])
+        self.heads = nn.ModuleList([
+            HeadALiBi(head_size, i, num_heads) 
+            for i in range(num_heads)
+        ])
         self.projection = nn.Linear(head_size * num_heads, model_dim)
         self.dropout = nn.Dropout(dropout)
 
@@ -87,11 +92,11 @@ class FeedForwardLayer(nn.Module):
     def forward(self,x):
         return self.net(x)
 
-class Block(nn.Module):
+class BlockALiBi(nn.Module):
     def __init__(self, model_dim, num_heads):
         super().__init__()
-        head_size = model_dim//num_heads
-        self.sa = MultiHeadAttention(num_heads, head_size)
+        head_size = model_dim // num_heads
+        self.sa = MultiHeadAttentionALiBi(num_heads, head_size)
         self.ffw = FeedForwardLayer(model_dim)
         self.l1 = nn.LayerNorm(model_dim)
         self.l2 = nn.LayerNorm(model_dim)
@@ -102,12 +107,12 @@ class Block(nn.Module):
         x = x + self.ffw(self.l2(x))
         return x, attention_weights
 
-class EncoderModel(nn.Module):
+class EncoderModelALiBi(nn.Module):
     def __init__(self, vocab_size):
         super().__init__()
+        # Remove position embedding table since we use ALiBi
         self.token_embedding_table = nn.Embedding(vocab_size, model_dim)
-        self.position_embedding_table = nn.Embedding(block_size, model_dim)
-        self.blocks = nn.ModuleList([Block(model_dim, n_head) for _ in range(n_layer)])
+        self.blocks = nn.ModuleList([BlockALiBi(model_dim, n_head) for _ in range(n_layer)])
         self.lf = nn.LayerNorm(model_dim)
         self.classifier = nn.Sequential(
             nn.Linear(model_dim, n_output)
@@ -125,9 +130,8 @@ class EncoderModel(nn.Module):
     def forward(self, idx, targets=None):
         B, T = idx.shape
         
-        tok_emb = self.token_embedding_table(idx)
-        pos_emb = self.position_embedding_table(torch.arange(T, device=device))
-        x = tok_emb + pos_emb
+        # Only use token embeddings, no position embeddings needed
+        x = self.token_embedding_table(idx)
         
         attention_maps = []
         for block in self.blocks:
@@ -144,44 +148,59 @@ class EncoderModel(nn.Module):
             loss = F.cross_entropy(logits, targets)
             
         return logits, loss, attention_maps
-
-class MaskedHead(nn.Module):
-    """ My head for self-attention """
-
-    def __init__(self, head_size):
+    
+class MaskedHeadALiBi(nn.Module):
+    """Masked Head for self-attention with ALiBi positional encoding"""
+    
+    def __init__(self, head_size, head_index, num_heads):
         super().__init__()
         self.key = nn.Linear(model_dim, head_size, bias=False)
         self.query = nn.Linear(model_dim, head_size, bias=False)
         self.value = nn.Linear(model_dim, head_size, bias=False)
-        self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size)))
         self.dropout = nn.Dropout(dropout)
+        
+        # ALiBi slope computation
+        m = 2 ** -(8 / num_heads) * (head_index + 1)
+        self.register_buffer(
+            "alibi_bias",
+            -m * torch.arange(block_size).unsqueeze(0).expand(block_size, -1)
+        )
+        self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size)))
 
     def forward(self, x):
-        # Batch Size, Sequence Length, Embedding Dimension
-        B,T,C = x.shape
-        k = self.key(x)   # (B,T,head size)
-        q = self.query(x) # (B,T,head size)
-        # computing attention scores using the scaled dot product
-        weight = q @ k.transpose(-2,-1) * k.shape[-1]**-0.5 # (B, T, C) @ (B, C, T) -> (B, T, T)
-        weight = weight.masked_fill(self.tril[:T, :T] == 0, float('-inf')) # (B, T, T)
-        weight = F.softmax(weight, dim=-1) # (B, T, T) now applying softmax so e power -inf becomes zero
+        B, T, C = x.shape
+        k = self.key(x)   # (B,T,head_size)
+        q = self.query(x) # (B,T,head_size)
+        v = self.value(x) # (B,T,head_size)
+
+        # Compute attention scores
+        weight = q @ k.transpose(-2,-1) * k.shape[-1]**-0.5  # (B,T,T)
         
-        # Store normalized weights BEFORE dropout
-        attention_weights = weight.clone()
+        # Add causal mask
+        weight = weight.masked_fill(self.tril[:T, :T] == 0, float('-inf'))
         
-        weight = self.dropout(weight)
-        # performing the weighted aggregation of the values
-        v = self.value(x) # (B,T,C)
-        output = weight @ v # (B, T, T) @ (B, T, C) -> (B, T, C)
+        # Add ALiBi positional bias
+        # Use only the relevant part of the bias based on sequence length
+        weight = weight + self.alibi_bias[:T, :T]
+        
+        # Store weights before dropout for visualization
+        attention_weights = F.softmax(weight, dim=-1)
+        
+        # Apply dropout
+        weight = self.dropout(attention_weights)
+        
+        # Weighted aggregation of values
+        output = weight @ v
+        
         return output, attention_weights
 
-class MultiHeadMaskedAttention(nn.Module):
-    """
-        My multiple heads in the self attention mechanism 
-    """
+class MultiHeadMaskedAttentionALiBi(nn.Module):
     def __init__(self, num_heads, head_size):
         super().__init__()
-        self.heads = nn.ModuleList([MaskedHead(head_size) for i in range(num_heads)])
+        self.heads = nn.ModuleList([
+            MaskedHeadALiBi(head_size, i, num_heads) 
+            for i in range(num_heads)
+        ])
         self.projection = nn.Linear(head_size * num_heads, model_dim)
         self.dropout = nn.Dropout(dropout)
 
@@ -196,18 +215,12 @@ class MultiHeadMaskedAttention(nn.Module):
         out = torch.cat(outputs, dim=-1)
         out = self.dropout(self.projection(out))
         return out, torch.stack(attention_weights)
-        # output = torch.cat([h(x) for h in self.heads], dim=-1)
-        # output = self.dropout(self.projection(output)) # Linear projection for the output layer
-        # return output
 
-class BlockDecoder(nn.Module):
-    """
-        My transformer block to add the attention layers and all the feedforward layers
-    """
+class BlockDecoderALiBi(nn.Module):
     def __init__(self, model_dim, num_heads):
         super().__init__()
-        head_size = model_dim//num_heads
-        self.sa = MultiHeadMaskedAttention(num_heads, head_size)
+        head_size = model_dim // num_heads
+        self.sa = MultiHeadMaskedAttentionALiBi(num_heads, head_size)
         self.ffw = FeedForwardLayer(model_dim)
         self.l1 = nn.LayerNorm(model_dim)
         self.l2 = nn.LayerNorm(model_dim)
@@ -217,23 +230,14 @@ class BlockDecoder(nn.Module):
         x = x + sa_out
         x = x + self.ffw(self.l2(x))
         return x, attention_weights
-        # x = x + self.sa(self.l1(x))
-        # x = x + self.ffw(self.l2(x))
-        # #print(x[:5])    
-        # return x 
 
-class DecoderModel(nn.Module):
-
+class DecoderModelALiBi(nn.Module):
     def __init__(self, vocab_size):
         super().__init__()
-        # each token directly reads off the logits for the next token from a lookup table
+        # Remove position embedding table since we use ALiBi
         self.token_embedding_table = nn.Embedding(vocab_size, model_dim)
-        self.position_embedding_table = nn.Embedding(block_size, model_dim)
-        self.blocks = nn.Sequential(*[BlockDecoder(model_dim, n_head) for _ in range(n_layer)])
-        self.lf = nn.LayerNorm(model_dim) # the final layer normalization
-        # self.classifier = nn.Sequential(
-        #     nn.Linear(model_dim, n_output)  # Direct mapping to output classes
-        # )
+        self.blocks = nn.ModuleList([BlockDecoderALiBi(model_dim, n_head) for _ in range(n_layer)])
+        self.lf = nn.LayerNorm(model_dim)
         self.lm_head = nn.Linear(model_dim, vocab_size)
         self.apply(self._init_weights)
 
@@ -247,28 +251,18 @@ class DecoderModel(nn.Module):
 
     def forward(self, idx, targets=None):
         B, T = idx.shape
-
-        # idx and targets are both (B,T) tensor of integers
-        tok_emb = self.token_embedding_table(idx) # (B,T,C)
-        pos_emb = self.position_embedding_table(torch.arange(T, device=device)) # (T,C)
-        x = tok_emb + pos_emb # (B,T,C)
-        #x = self.blocks(x) # (B,T,C)
-
+        
+        # Only use token embeddings, no position embeddings needed with ALiBi
+        x = self.token_embedding_table(idx)
+        
         attention_maps = []
         for block in self.blocks:
             x, attn_weights = block(x)
             attention_maps.append(attn_weights)
         
         x = self.lf(x)
-        
+        logits = self.lm_head(x)
 
-        # Use mean pooling instead of just the last token
-        #x = x.mean(dim=1)  # (B,C)
-        logits = self.lm_head(x) # (B,T,vocab_size)
-         # Classification layer
-        #logits = self.classifier(x)  # (B,num_classes)
-
-        #print(logits)
         if targets is None:
             loss = None
         else:
@@ -276,6 +270,7 @@ class DecoderModel(nn.Module):
             logits = logits.view(B*T, C)
             targets = targets.view(B*T)
             loss = F.cross_entropy(logits, targets)
+            
         return logits, loss, attention_maps
 
     def generate(self, idx, max_new_tokens):
@@ -284,7 +279,7 @@ class DecoderModel(nn.Module):
             # crop idx to the last block_size tokens
             idx_cond = idx[:, -block_size:]
             # get the predictions
-            logits, loss = self(idx_cond)
+            logits, loss, _ = self(idx_cond)
             # focus only on the last time step
             logits = logits[:, -1, :] # becomes (B, C)
             # apply softmax to get probabilities
@@ -294,4 +289,3 @@ class DecoderModel(nn.Module):
             # append sampled index to the running sequence
             idx = torch.cat((idx, idx_next), dim=1) # (B, T+1)
         return idx
-

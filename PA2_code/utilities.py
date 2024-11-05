@@ -2,6 +2,24 @@
 import matplotlib.pyplot as plt
 import torch
 import numpy as np
+import seaborn as sns
+from typing import List, Optional
+from tokenizer import SimpleTokenizer
+import os
+
+def load_texts(directory):
+    """
+    This function loads all texts from the specified directory, ignoring any files with "test" in their name. The text is used for "training" the tokenizer. Since our tokenizer is simple, we don't need to do any training, but we still need to ignore the test data. 
+    """
+
+    texts = []
+    files = os.listdir(directory)
+    for filename in files: 
+        if "test" in filename:  ## don't "read test files"
+            continue
+        with open(os.path.join(directory, filename), 'r', encoding='utf-8') as file:
+            texts.append(file.read())
+    return texts
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 class Utilities:
@@ -155,5 +173,171 @@ class Utilities:
                 plt.savefig(f'attention_map_layer_decoder{layer_idx}_head{head_idx}.png')
                 plt.close()
             
+
+class AttentionVisualizer:
+    def __init__(self, model):
+        self.model = model
+        
+    def get_attention_maps(self, input_ids: torch.Tensor) -> List[torch.Tensor]:
+        """Extract attention maps from model forward pass."""
+        with torch.no_grad():
+            _, _, attention_maps = self.model(input_ids)
+        return attention_maps
+
+    def plot_alibi_slopes(self, num_heads: int, max_len: int = 100) -> None:
+        """Visualize ALiBi slopes for each attention head."""
+        plt.figure(figsize=(12, 6))
+        for head_idx in range(num_heads):
+            m = 2 ** -(8 / num_heads) * (head_idx + 1)
+            positions = np.arange(max_len)
+            bias = -m * positions
+            plt.plot(positions, bias, label=f'Head {head_idx + 1}')
+        
+        plt.title('ALiBi Slopes Across Different Heads')
+        plt.xlabel('Position')
+        plt.ylabel('Bias Value')
+        plt.legend()
+        plt.grid(True)
+        plt.show()
+
+    def plot_attention_heatmap(self, 
+                             attention_weights: torch.Tensor,
+                             layer: int,
+                             head: int,
+                             tokens: Optional[List[str]] = None,
+                             title: Optional[str] = None) -> None:
+        """Plot attention heatmap for a specific layer and head."""
+        # Extract attention weights for specified layer and head
+        attn = attention_weights[layer][0, head].cpu().numpy()
+        
+        plt.figure(figsize=(10, 8))
+        if tokens is None:
+            tokens = [f't{i}' for i in range(attn.shape[0])]
+            
+        sns.heatmap(attn,
+                   xticklabels=tokens,
+                   yticklabels=tokens,
+                   cmap='viridis',
+                   vmin=0,
+                   vmax=1)
+        
+        if title is None:
+            title = f'Attention Pattern - Layer {layer + 1}, Head {head + 1}'
+        plt.title(title)
+        plt.xlabel('Key Tokens')
+        plt.ylabel('Query Tokens')
+        plt.xticks(rotation=45, ha='right')
+        plt.yticks(rotation=0)
+        plt.tight_layout()
+        plt.show()
+
+    def plot_aggregated_attention(self,
+                                attention_weights: torch.Tensor,
+                                layer: int,
+                                tokens: Optional[List[str]] = None,
+                                aggregation: str = 'mean') -> None:
+        """Plot aggregated attention patterns across all heads for a specific layer."""
+        # Get attention weights for specified layer
+        layer_attention = attention_weights[layer][0]  # [num_heads, seq_len, seq_len]
+        
+        if aggregation == 'mean':
+            aggregated_attn = layer_attention.mean(dim=0).cpu().numpy()
+        elif aggregation == 'max':
+            aggregated_attn = layer_attention.max(dim=0)[0].cpu().numpy()
+        else:
+            raise ValueError("aggregation must be either 'mean' or 'max'")
+            
+        plt.figure(figsize=(10, 8))
+        if tokens is None:
+            tokens = [f't{i}' for i in range(aggregated_attn.shape[0])]
+            
+        sns.heatmap(aggregated_attn,
+                   xticklabels=tokens,
+                   yticklabels=tokens,
+                   cmap='viridis',
+                   vmin=0,
+                   vmax=1)
+        
+        plt.title(f'{aggregation.capitalize()} Attention Pattern - Layer {layer + 1}')
+        plt.xlabel('Key Tokens')
+        plt.ylabel('Query Tokens')
+        plt.xticks(rotation=45, ha='right')
+        plt.yticks(rotation=0)
+        plt.tight_layout()
+        plt.show()
+
+    def plot_attention_statistics(self,
+                                attention_weights: torch.Tensor,
+                                layer: int) -> None:
+        """Plot statistical properties of attention patterns for a specific layer."""
+        layer_attention = attention_weights[layer][0]  # [num_heads, seq_len, seq_len]
+        
+        fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+        
+        # Plot 1: Mean attention weight per position
+        mean_weights = layer_attention.mean(dim=0).mean(dim=0).cpu().numpy()
+        axes[0].plot(mean_weights)
+        axes[0].set_title('Mean Attention by Position')
+        axes[0].set_xlabel('Position')
+        axes[0].set_ylabel('Mean Attention Weight')
+        axes[0].grid(True)
+        
+        # Plot 2: Attention entropy per head
+        entropy = -(layer_attention * torch.log(layer_attention + 1e-10)).sum(dim=-1).mean(dim=-1)
+        axes[1].bar(range(layer_attention.shape[0]), entropy.cpu().numpy())
+        axes[1].set_title('Attention Entropy by Head')
+        axes[1].set_xlabel('Head')
+        axes[1].set_ylabel('Entropy')
+        axes[1].grid(True)
+        
+        # Plot 3: Attention sparsity per head
+        sparsity = (layer_attention < 0.01).float().mean(dim=-1).mean(dim=-1)
+        axes[2].bar(range(layer_attention.shape[0]), sparsity.cpu().numpy())
+        axes[2].set_title('Attention Sparsity by Head')
+        axes[2].set_xlabel('Head')
+        axes[2].set_ylabel('Sparsity (% near zero)')
+        axes[2].grid(True)
+        
+        plt.tight_layout()
+        plt.show()
+
+def visualize_alibi_patterns(model, input_text: str, tokenizer) -> None:
+    """Comprehensive visualization of ALiBi attention patterns."""
+    visualizer = AttentionVisualizer(model)
+    texts = load_texts('speechesdataset')
+    tokenizer = SimpleTokenizer(' '.join(texts)) # create a tokenizer from the data
+    # Tokenize input
+    input_ids = tokenizer(input_text, return_tensors='pt')['input_ids']
+    tokens = tokenizer.convert_ids_to_tokens(input_ids[0])
+    
+    # Get attention maps
+    attention_maps = visualizer.get_attention_maps(input_ids)
+    
+    # 1. Plot ALiBi slopes
+    visualizer.plot_alibi_slopes(num_heads=model.blocks[0].sa.heads[0].key.out_features)
+    
+    # 2. Plot attention patterns for each layer
+    for layer_idx in range(len(model.blocks)):
+        # Plot individual head patterns
+        for head_idx in range(len(model.blocks[layer_idx].sa.heads)):
+            visualizer.plot_attention_heatmap(
+                attention_maps[layer_idx],
+                layer_idx,
+                head_idx,
+                tokens=tokens
+            )
+        
+        # Plot aggregated attention
+        visualizer.plot_aggregated_attention(
+            attention_maps[layer_idx],
+            layer_idx,
+            tokens=tokens
+        )
+        
+        # Plot attention statistics
+        visualizer.plot_attention_statistics(
+            attention_maps[layer_idx],
+            layer_idx
+        )
 
 
