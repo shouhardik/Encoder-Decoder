@@ -109,9 +109,10 @@ class EncoderModel(nn.Module):
         self.position_embedding_table = nn.Embedding(block_size, model_dim)
         self.blocks = nn.ModuleList([Block(model_dim, n_head) for _ in range(n_layer)])
         self.lf = nn.LayerNorm(model_dim)
-        self.classifier = nn.Sequential(
-            nn.Linear(model_dim, n_output)
-        )
+        # self.classifier = nn.Sequential(
+        #     nn.Linear(model_dim, n_output)
+        # )
+        self.lm_head = nn.Linear(model_dim, vocab_size)
         self.apply(self._init_weights)
 
     def _init_weights(self, module):
@@ -135,15 +136,9 @@ class EncoderModel(nn.Module):
             attention_maps.append(attn_weights)
         
         x = self.lf(x)
+        #logits = self.lm_head(x)
         x = x.mean(dim=1)
-        logits = self.classifier(x)
-
-        if targets is None:
-            loss = None
-        else:
-            loss = F.cross_entropy(logits, targets)
-            
-        return logits, loss, attention_maps
+        return x, attention_maps
 
 class MaskedHead(nn.Module):
     """ My head for self-attention """

@@ -108,6 +108,31 @@ def compute_perplexity(decoderLMmodel, data_loader, eval_iters=100):
     return perplexity
 
 
+class Classifier(nn.Module):
+    def __init__(self, input_dim, hidden_dim, output_dim, vocab_size):
+        super().__init__()
+        # Encoder components
+        self.encoder = EncoderModel(vocab_size)
+        
+        # Classifier layers
+        self.fc1 = nn.Linear(input_dim, hidden_dim)  # hidden layer
+        self.fc2 = nn.Linear(hidden_dim, output_dim) #output layer
+        self.dropout = nn.Dropout(0.2)
+    
+    def forward(self, x, targets=None):
+        encoder_output, attention_maps = self.encoder(x)
+        
+        # Pass through classifier layers
+        x = F.relu(self.fc1(encoder_output))  # Hidden layer with ReLU activation
+        x = self.dropout(x) # Dropout applied after the hidden layer
+        logits = self.fc2(x) # Output layer producing final logits
+        
+        # Calculate loss if targets are provided
+        loss = None
+        if targets is not None:
+            loss = F.cross_entropy(logits, targets)
+        
+        return logits, loss, attention_maps
 
 def main():
 
@@ -128,7 +153,10 @@ def main():
     #model = DistangledEncoderModel(tokenizer.vocab_size).to(device)
     #model = RelativePositionEncoder(tokenizer.vocab_size).to(device)
     # we can create an Optimizer
-    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+
+    # Initialize classifier (which includes the encoder)
+    classifier = Classifier(model_dim, n_hidden, n_output, tokenizer.vocab_size).to(device)
+    optimizer = torch.optim.AdamW(classifier.parameters(), lr=learning_rate)
 
     utility = Utilities(tokenizer, model)
     sentence = "Sample sentence for  my sanity check for NLP Q1 PA2"
@@ -183,75 +211,78 @@ def main():
      # for the classification  task, you will train for a fixed number of epochs like this:
 
     for epoch in range(epochs_CLS):
-        total_loss = 0  # Initialize total_loss at the start of each epoch
-        num_batches = 0  # Initialize num_batches at the start of each epoch
+        total_loss = 0
+        num_batches = 0
         for xb, yb in train_CLS_loader:
             xb, yb = xb.to(device), yb.to(device)
-            # xb : tensor containing a batch of sequences
-            # yb : tensor containing the corresponding labels like 0,1,2
-            #print(yb)
-            # CLS training code here
-            logits, loss, attention_map = model(xb, yb)
+            logits, loss, attention_map = classifier(xb, yb)
             
-            # Backward pass
-            # Clear the gradients
             optimizer.zero_grad()
-            # Calculate the gradients for all the parameters
             loss.backward()
-            # Update the parameteres
             optimizer.step()
             
             total_loss += loss.item()
             num_batches += 1
-            
-            # if batch_idx % 10 == 0:
-            #     print(f'Epoch: {epoch}, Batch: {batch_idx}, Loss: {loss.item():.4f}')
         
         # Compute epoch metrics
         avg_loss = total_loss / num_batches
-        test_acc = compute_classifier_accuracy(model, test_CLS_loader)
-        
-        print(f'Epoch {epoch}: Avg Loss = {avg_loss:.4f}, Test Acc = {test_acc:.2f}%')
+        train_acc = compute_classifier_accuracy(classifier, train_CLS_loader)
+        test_acc = compute_classifier_accuracy(classifier, test_CLS_loader)
+    
+        print(f'Epoch {epoch}: Train Acc = {train_acc:.2f}%, Test Acc = {test_acc:.2f}%')
+
+    # After training, compute final accuracies
+    final_train_acc = compute_classifier_accuracy(classifier, train_CLS_loader)
+    final_test_acc = compute_classifier_accuracy(classifier, test_CLS_loader)
+    print(f'Final Train Accuracy: {final_train_acc:.2f}%')
+    print(f'Final Test Accuracy: {final_test_acc:.2f}%')
 
     # for the language modeling task, you will iterate over the training data for a fixed number of iterations like this:
     total_loss = 0
     num_batches = 0
+    train_perplexities = []
+
     for i, (xb, yb) in enumerate(train_LM_loader):
         if i >= max_iters:
             break
         xb, yb = xb.to(device), yb.to(device)
-        # LM training code here
+        
+        # LM training code
         _, loss, _ = decoderModel(xb, yb)
-            
+        
         # Backward pass
-        # Clear the gradients
         decoder_optimizer.zero_grad()
-        # Calculate the gradients for all the parameters
         loss.backward()
-        # Update the parameteres
         decoder_optimizer.step()
         
         total_loss += loss.item()
         num_batches += 1
-            
         
         if (i + 1) % eval_interval == 0:
             avg_loss = total_loss / num_batches
             perplexity_train = compute_perplexity(decoderModel, train_LM_loader, eval_iters)
-            perplexity_hbush = compute_perplexity(decoderModel, test_LM_hbush_loader, eval_iters)
-            perplexity_obama = compute_perplexity(decoderModel, test_LM_obama_loader, eval_iters)
-            perplexity_wbush = compute_perplexity(decoderModel, test_LM_wbush_loader, eval_iters)
-            
-            print(f'Iteration {i+1}: Avg Loss = {avg_loss:.4f}')
-            print(f'Perplexity (Training Set): {perplexity_train:.2f}')
-            print(f'Perplexity (H. Bush): {perplexity_hbush:.2f}')
-            print(f'Perplexity (Obama): {perplexity_obama:.2f}')
-            print(f'Perplexity (W. Bush): {perplexity_wbush:.2f}')
-        
+            train_perplexities.append(perplexity_train)
+            print(f'Iteration {i+1}: Perplexity (Training Set): {perplexity_train:.2f}')
             total_loss = 0
             num_batches = 0
-    
-print("Language model training completed.")
+
+    # Print training perplexities
+    # print("\nTraining Perplexities:")
+    # for iter_num, perplexity in enumerate(train_perplexities, start=1):
+    #     print(f"Perplexity at the {iter_num * 100}th iteration on the training set: {perplexity:.2f}")
+
+    # Compute final perplexities on test sets
+    perplexity_obama = compute_perplexity(decoderModel, test_LM_obama_loader, eval_iters)
+    perplexity_hbush = compute_perplexity(decoderModel, test_LM_hbush_loader, eval_iters)
+    perplexity_wbush = compute_perplexity(decoderModel, test_LM_wbush_loader, eval_iters)
+
+    print("\nFinal Test Perplexities:")
+    print(f'Perplexity at the 500th iteration on the test_LM_obama.txt: {perplexity_obama:.2f}')
+    print(f'Perplexity at the 500th iteration on the test_LM_hbush.txt: {perplexity_hbush:.2f}')
+    print(f'Perplexity at the 500th iteration on the test_LM_wbush.txt: {perplexity_wbush:.2f}')
+
+    print("\nLanguage model training completed.")
+
 
     
 

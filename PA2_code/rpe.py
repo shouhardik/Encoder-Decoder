@@ -178,14 +178,14 @@ class RelativePositionEncoder(nn.Module):
         
         x = self.ln_f(x)
         x = x.mean(dim=1)  # pool over sequence
-        logits = self.classifier(x)
+        # logits = self.classifier(x)
         
-        if targets is None:
-            loss = None
-        else:
-            loss = F.cross_entropy(logits, targets)
+        # if targets is None:
+        #     loss = None
+        # else:
+        #     loss = F.cross_entropy(logits, targets)
             
-        return logits, loss, attention_maps
+        return x, attention_maps
 
 class DecoderBlock(nn.Module):
     def __init__(self, model_dim, num_heads):

@@ -161,14 +161,14 @@ class SparseEncoderModel(nn.Module):
         x = self.lf(x)
         # Mean pooling instead of taking just the last token
         x = x.mean(dim=1)
-        logits = self.classifier(x)
+        #logits = self.classifier(x)
 
-        if targets is None:
-            loss = None
-        else:
-            loss = F.cross_entropy(logits, targets)
+        # if targets is None:
+        #     loss = None
+        # else:
+        #     loss = F.cross_entropy(logits, targets)
             
-        return logits, loss, attention_maps
+        return x, attention_maps
 
     def add_global_tokens(self):
         """
