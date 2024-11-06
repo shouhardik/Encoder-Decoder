@@ -152,13 +152,6 @@ class DistangledEncoderModel(nn.Module):
         
         x = self.ln_final(x)
         x = x.mean(dim=1)  # Pool over sequence length
-        # logits = self.classifier(x)
-        
-        # if targets is None:
-        #     loss = None
-        # else:
-        #     loss = F.cross_entropy(logits, targets)
-            
         return x, attention_maps
 
 class DisentangledDecoderBlock(nn.Module):

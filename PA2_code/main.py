@@ -9,7 +9,7 @@ from tokenizer import SimpleTokenizer
 from dataset import SpeechesClassificationDataset, LanguageModelingDataset
 from transformer import EncoderModel, DecoderModel
 from alibi import EncoderModelALiBi, DecoderModelALiBi
-from utilities import Utilities, visualize_alibi_patterns
+from utilities import Utilities
 from sparse import SparseEncoderModel, SparseDecoderModel
 from disentagled import DistangledEncoderModel, DisentagledDecoderModel
 from rpe import RelativePositionEncoder, RelativePositionDecoder
@@ -24,8 +24,8 @@ block_size = 32  # Maximum context length for predictions
 learning_rate = 1e-3  # Learning rate for the optimizer
 n_embd = 64  # Embedding dimension
 model_dim = 64  # Embedding dimension
-n_head = 2  # Number of attention heads
-n_layer = 4  # Number of transformer layers
+n_head = 2  # Number of attention heads; Hyperparameter Tuning using for 4
+n_layer = 4  # Number of transformer layers; Hyperparameter Tuning using for 6
 
 
 eval_interval = 100  # How often to evaluate train and test perplexity during training
@@ -39,7 +39,7 @@ eval_iters = 200  # Number of iterations to evaluate perplexity on the test set
 n_input = 64  # Input size for the classifier, should match the embedding size of the transformer
 n_hidden = 100  # Hidden size for the classifier
 n_output = 3  # Output size for the classifier, we have 3 classes
-epochs_CLS = 15 # epochs for classifier training
+epochs_CLS = 15 # epochs for classifier training; Hyperparameter Tuning using 20 
 
 def load_texts(directory):
     """
@@ -170,15 +170,8 @@ def main():
     decoder_optimizer = torch.optim.AdamW(decoderModel.parameters(), lr=learning_rate)
 
     utility = Utilities(tokenizer, decoderModel)
-    sent = "Sample sentence for  my sanity check for NLP Q2 PA2"
-    utility.sanity_check02(sent, block_size)
-
-    # alibiModel = EncoderModelALiBi(tokenizer.vocab_size).to(device)
-    # tokenizer = tokenizer
-    # text = "Example input text to analyze"
-    # # util = AttentionVisualizer(alibiModel)
-    # # util.
-    # visualize_alibi_patterns(alibiModel, text, tokenizer)
+    sent = "Sample sentence for my sanity check for NLP Q2 PA2. Utility class has been used"
+    utility.sanity_check03(sent, block_size)
 
     inputfile = "speechesdataset/train_LM.txt"
     with open(inputfile, 'r', encoding='utf-8') as f:

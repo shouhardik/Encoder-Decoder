@@ -140,12 +140,6 @@ class EncoderModelALiBi(nn.Module):
         
         x = self.lf(x)
         x = x.mean(dim=1)
-        #logits = self.classifier(x)
-
-        # if targets is None:
-        #     loss = None
-        # else:
-        #     loss = F.cross_entropy(logits, targets)
             
         return x, attention_maps
     
