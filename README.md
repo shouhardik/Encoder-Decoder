@@ -37,7 +37,6 @@ All the png files generated are attatched. The relevant png files are disccused 
 ## Model Run
 
 To run the models, use the following commands:
-    ```bash
     python main.py 
 
 ## Contributing
